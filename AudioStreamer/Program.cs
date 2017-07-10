@@ -2,6 +2,7 @@
 using CSCore.Streams;
 using System;
 using System.Diagnostics;
+using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading.Tasks;
@@ -14,10 +15,8 @@ namespace AudioStreamer
         static SoundInSource Source;
         static NetworkStream Stream;
         static byte[] Bytes = new byte[1024 * 1024];
-        static TcpClient Conn = new TcpClient()
-        {
-            NoDelay = true
-        };
+        static IPEndPoint End;
+        static TaskCompletionSource<bool> DisconnectWaiter;
 
         static void Main(string[] args)
         {
@@ -40,15 +39,30 @@ namespace AudioStreamer
                     else
                         IPAddr = IPAddress.Parse(IP);
 
-                    using (Conn)
-                    {
-                        Conn.Connect(new IPEndPoint(IPAddr, 1420));
-                        Stream = Conn.GetStream();
+                    End = new IPEndPoint(IPAddr, 1420);
+                    Capture.Start();
 
-                        Capture.Start();
-                        Console.WriteLine("Started recording, press enter to exit");
-                        Console.ReadLine();
-                        Capture.Stop();
+                    Console.WriteLine("Booted");
+                    while (true)
+                    {
+                        using (var Conn = new TcpClient()
+                        {
+                            NoDelay = true
+                        })
+                        {
+                            try
+                            {
+                                Conn.Connect(End);
+                                Stream = Conn.GetStream();
+                                (DisconnectWaiter = new TaskCompletionSource<bool>()).Task.GetAwaiter().GetResult();
+                            }
+                            catch (Exception Ex)
+                            {
+                                Console.WriteLine(Ex);
+                            }
+
+                            Stream = null;
+                        }
                     }
                 }
             }
@@ -66,8 +80,15 @@ namespace AudioStreamer
                     Bytes[i + 1] = e.Data[i + 2];
                     Bytes[i] = e.Data[i + 3];
                 });
-                
-                await Stream.WriteAsync(Bytes, 0, e.ByteCount);
+
+                try
+                {
+                    await Stream?.WriteAsync(Bytes, 0, e.ByteCount);
+                }
+                catch (Exception)
+                {
+                    DisconnectWaiter?.TrySetResult(false);
+                }
             }
         }
     }
