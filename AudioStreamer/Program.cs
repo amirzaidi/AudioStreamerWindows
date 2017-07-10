@@ -1,7 +1,4 @@
-﻿using CSCore;
-using CSCore.Codecs.WAV;
-using CSCore.MediaFoundation;
-using CSCore.SoundIn;
+﻿using CSCore.SoundIn;
 using CSCore.Streams;
 using System;
 using System.Diagnostics;
@@ -16,6 +13,7 @@ namespace AudioStreamer
         static WasapiLoopbackCapture Capture;
         static SoundInSource Source;
         static NetworkStream Stream;
+        static byte[] Bytes = new byte[1024 * 1024];
         static TcpClient Conn = new TcpClient()
         {
             NoDelay = true
@@ -29,7 +27,6 @@ namespace AudioStreamer
                 using (Source = new SoundInSource(Capture))
                 {
                     Source.DataAvailable += DataAvailable;
-                    Capture.Stopped += RecordingStopped;
 
                     Console.Write("IP? Empty for ADB: ");
 
@@ -43,22 +40,24 @@ namespace AudioStreamer
                     else
                         IPAddr = IPAddress.Parse(IP);
 
-                    Conn.Connect(new IPEndPoint(IPAddr, 1420));
-                    Stream = Conn.GetStream();
+                    using (Conn)
+                    {
+                        Conn.Connect(new IPEndPoint(IPAddr, 1420));
+                        Stream = Conn.GetStream();
 
-                    Capture.Start();
-                    Console.WriteLine("Started recording, press enter to exit");
-                    Console.ReadLine();
-                    Capture.Stop();
+                        Capture.Start();
+                        Console.WriteLine("Started recording, press enter to exit");
+                        Console.ReadLine();
+                        Capture.Stop();
+                    }
                 }
             }
         }
-        
+
         static async void DataAvailable(object s, DataAvailableEventArgs e)
         {
             if (e.ByteCount > 0)
             {
-                var Bytes = new byte[e.ByteCount];
                 Parallel.For(0, e.ByteCount / 4, j =>
                 {
                     int i = j * 4;
@@ -68,21 +67,7 @@ namespace AudioStreamer
                     Bytes[i] = e.Data[i + 3];
                 });
                 
-                await Stream.WriteAsync(Bytes, 0, Bytes.Length);
-            }
-        }
-
-        static void RecordingStopped(object s, RecordingStoppedEventArgs e)
-        {
-            Dispose(ref Conn);
-        }
-
-        static void Dispose<T>(ref T Disposable) where T : IDisposable
-        {
-            if (Disposable != null)
-            {
-                Disposable.Dispose();
-                Disposable = default(T);
+                await Stream.WriteAsync(Bytes, 0, e.ByteCount);
             }
         }
     }
