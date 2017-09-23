@@ -19,10 +19,15 @@ namespace AudioStreamer
 
         static void Main(string[] args)
         {
-            Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.High;
+            Task.Run((Action)MainAsync);
+            Window.Init();
+        }
+
+        static async void MainAsync() 
+        {
+            Console.Title = "Audio Streamer - PC to Android";
 
             bool UseAdb = false;
-
             try
             {
                 var AdbDevices = Process.Start(new ProcessStartInfo()
@@ -48,14 +53,15 @@ namespace AudioStreamer
                 Console.Write("IP: ");
                 IPAddr = IPAddress.Parse(Console.ReadLine());
             }
-
-            var Remote = new IPEndPoint(IPAddr, ServerPort);
+            
             using (Capture = new WasapiLoopbackCapture(0))
             {
                 Capture.Initialize();
                 using (Source = new SoundInSource(Capture))
                 {
                     Source.DataAvailable += DataAvailable;
+
+                    Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.High;
                     Capture.Start();
 
                     Console.WriteLine("Started recording audio");
@@ -72,14 +78,23 @@ namespace AudioStreamer
 
                         using (var Conn = new TcpClient()
                         {
-                            NoDelay = true
+                            NoDelay = true,
+                            ReceiveBufferSize = 512,
+                            SendBufferSize = ushort.MaxValue / 4
                         })
                         {
                             try
                             {
-                                Conn.Connect(Remote);
+                                await Conn.ConnectAsync(IPAddr, ServerPort);
                                 Stream = Conn.GetStream();
-                                (DisconnectWaiter = new TaskCompletionSource<bool>()).Task.GetAwaiter().GetResult();
+                                if (Stream.ReadByte() == 1)
+                                {
+                                    Console.WriteLine("Connected to " + IPAddr.ToString());
+                                    Window.SetWindowShown(false);
+                                    await (DisconnectWaiter = new TaskCompletionSource<bool>()).Task;
+                                    Window.SetWindowShown(true);
+                                    Console.WriteLine("Disconnected");
+                                }
                             }
                             catch
                             {
@@ -88,7 +103,7 @@ namespace AudioStreamer
                             Stream = null;
                         }
 
-                        NoSpamDelay.GetAwaiter().GetResult();
+                        await NoSpamDelay;
                     }
                 }
             }
