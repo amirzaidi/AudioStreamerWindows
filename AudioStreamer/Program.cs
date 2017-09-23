@@ -64,7 +64,7 @@ namespace AudioStreamer
                     Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.High;
                     Capture.Start();
 
-                    Console.WriteLine("Started recording audio");
+                    Console.WriteLine($"Started recording audio at {Source.WaveFormat.SampleRate} Hz");
                     while (true)
                     {
                         var NoSpamDelay = Task.Delay(1000);
@@ -96,10 +96,7 @@ namespace AudioStreamer
                                     Console.WriteLine("Disconnected");
                                 }
                             }
-                            catch
-                            {
-                            }
-
+                            catch { }
                             Stream = null;
                         }
 
