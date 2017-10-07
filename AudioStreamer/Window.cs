@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Runtime.InteropServices;
-using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Drawing;
 using System.Diagnostics;
@@ -37,10 +36,6 @@ namespace AudioStreamer
             notifyIcon.Visible = true;
             notifyIcon.Click += (s, e) => SetWindowShown(!Shown);
 
-            var menu = new ContextMenu();
-            menu.MenuItems.Add(new MenuItem("Exit", new EventHandler(Exit)));
-            notifyIcon.ContextMenu = menu;
-
             WinShell = GetShellWindow();
             WinDesktop = GetDesktopWindow();
 
@@ -52,13 +47,6 @@ namespace AudioStreamer
             }), true);
 
             Application.Run();
-        }
-
-        public static void Exit(object sender, EventArgs e)
-        {
-            notifyIcon.Visible = false;
-            Application.Exit();
-            Environment.Exit(1);
         }
 
         public static void SetWindowShown(bool Show = true)

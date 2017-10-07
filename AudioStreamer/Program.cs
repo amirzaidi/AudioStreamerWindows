@@ -4,6 +4,7 @@ using System;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace AudioStreamer
@@ -19,15 +20,17 @@ namespace AudioStreamer
 
         static void Main(string[] args)
         {
-            Task.Run((Action)MainAsync);
+            Task.Run(MainAsync);
             Window.Init();
         }
 
-        static async void MainAsync() 
+        static async Task MainAsync()
         {
             Console.Title = "Audio Streamer - PC to Android";
 
+            IPAddress IPAddr;
             bool UseAdb = false;
+
             try
             {
                 var AdbDevices = Process.Start(new ProcessStartInfo()
@@ -38,14 +41,13 @@ namespace AudioStreamer
                     RedirectStandardOutput = true
                 });
 
-                AdbDevices.StandardOutput.ReadLine();
-                UseAdb = AdbDevices.StandardOutput.ReadLine().Trim() != string.Empty;
+                await AdbDevices.StandardOutput.ReadLineAsync();
+                UseAdb = !string.IsNullOrWhiteSpace(await AdbDevices.StandardOutput.ReadLineAsync());
             }
             catch (System.ComponentModel.Win32Exception)
             {
             }
 
-            IPAddress IPAddr;
             if (UseAdb)
                 IPAddr = IPAddress.Loopback;
             else
@@ -53,53 +55,67 @@ namespace AudioStreamer
                 Console.Write("IP: ");
                 IPAddr = IPAddress.Parse(Console.ReadLine());
             }
-            
-            using (Capture = new WasapiLoopbackCapture(0))
+
+            Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.High;
+            using (Capture = new WasapiLoopbackCapture(0, new CSCore.WaveFormat(), ThreadPriority.Highest))
             {
-                Capture.Initialize();
-                using (Source = new SoundInSource(Capture))
+                while (true)
                 {
-                    Source.DataAvailable += DataAvailable;
+                    var NoSpamDelay = Task.Delay(1000);
+                    if (UseAdb)
+                        Process.Start(new ProcessStartInfo()
+                        {
+                            FileName = "adb",
+                            Arguments = "forward tcp:1420 tcp:1420",
+                            UseShellExecute = false
+                        });
 
-                    Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.High;
-                    Capture.Start();
-
-                    Console.WriteLine($"Started recording audio at {Source.WaveFormat.SampleRate} Hz");
-                    while (true)
+                    using (var Conn = new TcpClient()
                     {
-                        var NoSpamDelay = Task.Delay(1000);
-                        if (UseAdb)
-                            Process.Start(new ProcessStartInfo()
-                            {
-                                FileName = "adb",
-                                Arguments = "forward tcp:1420 tcp:1420",
-                                UseShellExecute = false
-                            });
-
-                        using (var Conn = new TcpClient()
+                        NoDelay = true,
+                        ReceiveBufferSize = 64,
+                        SendBufferSize = 1 << 12    //2^12 = ~4000 so 1000 floats
+                    })
+                    {
+                        try
                         {
-                            NoDelay = true,
-                            ReceiveBufferSize = 512,
-                            SendBufferSize = ushort.MaxValue / 4
-                        })
-                        {
-                            try
+                            await Conn.ConnectAsync(IPAddr, ServerPort);
+                            Stream = Conn.GetStream();
+                            if (Stream.ReadByte() == 1)
                             {
-                                await Conn.ConnectAsync(IPAddr, ServerPort);
-                                Stream = Conn.GetStream();
-                                if (Stream.ReadByte() == 1)
+                                Console.WriteLine("Connected to " + IPAddr.ToString());
+                                Capture.Initialize();
+                                using (Source = new SoundInSource(Capture))
                                 {
-                                    Console.WriteLine("Connected to " + IPAddr.ToString());
-                                    Window.SetWindowShown(false);
-                                    await (DisconnectWaiter = new TaskCompletionSource<bool>()).Task;
-                                    Window.SetWindowShown(true);
-                                    Console.WriteLine("Disconnected");
+                                    int SampleRateServer = Source.WaveFormat.SampleRate;
+                                    int SampleRateClient = Stream.ReadByte() | Stream.ReadByte() << 8;
+                                    if (SampleRateClient != SampleRateServer)
+                                    {
+                                        Console.WriteLine($"Sample rate mismatch, PC was {SampleRateServer} Hz but client was {SampleRateClient} Hz");
+                                        Console.WriteLine("Adjust your PC's sample rate then press any key to try again");
+                                        Console.ReadKey();
+                                        Console.Clear();
+                                    }
+                                    else
+                                    {
+                                        // Start Capturing
+                                        Source.DataAvailable += DataAvailable;
+                                        Capture.Start();
+
+                                        Console.WriteLine($"Started recording audio at {SampleRateServer} Hz");
+                                        Window.SetWindowShown(false);
+
+                                        // Stop Capturing
+                                        await (DisconnectWaiter = new TaskCompletionSource<bool>()).Task;
+                                        await Task.Run(() => Capture.Stop());
+
+                                        Window.SetWindowShown(true);
+                                        Console.WriteLine("Disconnected, stopped recording audio");
+                                    }
                                 }
                             }
-                            catch { }
-                            Stream = null;
                         }
-
+                        catch { }
                         await NoSpamDelay;
                     }
                 }
@@ -108,25 +124,23 @@ namespace AudioStreamer
 
         static async void DataAvailable(object s, DataAvailableEventArgs e)
         {
-            if (e.ByteCount > 0)
+            // Big endian to little endian
+            Parallel.For(0, e.ByteCount / 4, j =>
             {
-                Parallel.For(0, e.ByteCount / 4, j =>
-                {
-                    int i = j * 4;
-                    Bytes[i + 3] = e.Data[i];
-                    Bytes[i + 2] = e.Data[i + 1];
-                    Bytes[i + 1] = e.Data[i + 2];
-                    Bytes[i] = e.Data[i + 3];
-                });
+                int i = j * 4;
+                Bytes[i + 3] = e.Data[i];
+                Bytes[i + 2] = e.Data[i + 1];
+                Bytes[i + 1] = e.Data[i + 2];
+                Bytes[i] = e.Data[i + 3];
+            });
 
-                try
-                {
-                    await Stream?.WriteAsync(Bytes, 0, e.ByteCount);
-                }
-                catch (Exception)
-                {
-                    DisconnectWaiter?.TrySetResult(false);
-                }
+            try
+            {
+                await Stream.WriteAsync(Bytes, 0, e.ByteCount);
+            }
+            catch (Exception)
+            {
+                DisconnectWaiter?.TrySetResult(false);
             }
         }
     }
