@@ -88,7 +88,7 @@ namespace AudioStreamer
                                 using (Source = new SoundInSource(Capture))
                                 {
                                     int SampleRateServer = Source.WaveFormat.SampleRate;
-                                    int SampleRateClient = Stream.ReadByte() | Stream.ReadByte() << 8;
+                                    int SampleRateClient = Stream.ReadByte() | Stream.ReadByte() << 8 | Stream.ReadByte() << 16;
                                     if (SampleRateClient != SampleRateServer)
                                     {
                                         Console.WriteLine($"Sample rate mismatch, PC was {SampleRateServer} Hz but client was {SampleRateClient} Hz");
